@@ -11,6 +11,20 @@ const apiClient = axios.create({
   timeout: 10000, // 10 seconds timeout
 });
 
+// Automatically inject JWT token into all protected groundwater API requests
+apiClient.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('token');
+    if (token) {
+      config.headers['Authorization'] = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
+
 export const apiService = {
   // Check backend server status
   checkHealth: async () => {
@@ -96,6 +110,42 @@ export const apiService = {
     const response = await apiClient.get('/ai/recommendations', {
       params: { district, year },
       timeout: 30000, // 30 seconds timeout for AI generation
+    });
+    return response.data; // Returns ApiResponse<String>
+  },
+
+  // Get India Map marker details (Feature 1)
+  getMapData: async () => {
+    const response = await apiClient.get('/map-data');
+    return response.data; // Returns ApiResponse<List<MapDataDTO>>
+  },
+
+  // Get Executive Dashboard aggregated metrics (Feature 4)
+  getDashboardData: async () => {
+    const response = await apiClient.get('/dashboard');
+    return response.data; // Returns ApiResponse<DashboardDTO>
+  },
+
+  // Get Statistics charts data with dynamic filters (Feature 5)
+  getStatistics: async (filters = {}) => {
+    const response = await apiClient.get('/statistics', {
+      params: filters
+    });
+    return response.data; // Returns ApiResponse<StatisticsDTO>
+  },
+
+  // Get Risk Analytics and AI insights (Feature 6)
+  getAnalytics: async () => {
+    const response = await apiClient.get('/analytics', {
+      timeout: 30000
+    });
+    return response.data; // Returns ApiResponse<AnalyticsDTO>
+  },
+
+  // Generate AI-powered comprehensive markdown reports (Feature 3)
+  generateReport: async (reportRequest) => {
+    const response = await apiClient.post('/ai/report', reportRequest, {
+      timeout: 45000 // 45 seconds timeout for complex report generation
     });
     return response.data; // Returns ApiResponse<String>
   },

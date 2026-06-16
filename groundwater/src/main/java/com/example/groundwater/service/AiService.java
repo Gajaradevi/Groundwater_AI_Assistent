@@ -1,27 +1,29 @@
 package com.example.groundwater.service;
 
-import com.example.groundwater.dto.GroundwaterDataDTO;
+import com.example.groundwater.dto.*;
 import org.springframework.ai.chat.ChatClient;
 import org.springframework.ai.chat.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.stereotype.Service;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * Service class that handles AI-powered operations using Spring AI and Groq.
- * It uses the Retrieval-Augmented Generation (RAG) pattern:
- * 1. Fetches data from MySQL database using the existing GroundwaterDataService.
- * 2. Injects this data into a structured system and user prompt context.
- * 3. Sends the prompt to Groq API.
- * 4. Returns a concise explanation back to the user.
+ * It uses the Retrieval-Augmented Generation (RAG) pattern with fallback options.
  */
 @Service
 public class AiService {
 
+    private static final Logger log = LoggerFactory.getLogger(AiService.class);
     private final ChatClient chatClient;
     private final GroundwaterDataService groundwaterDataService;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
-    // Constructor injection for ChatClient (configured via application.properties) 
-    // and GroundwaterDataService to query MySQL.
     public AiService(ChatClient chatClient, GroundwaterDataService groundwaterDataService) {
         this.chatClient = chatClient;
         this.groundwaterDataService = groundwaterDataService;
@@ -30,309 +32,413 @@ public class AiService {
     /**
      * Generates a concise groundwater stress explanation for a given district and year.
      * Uses Retrieval-Augmented Generation (RAG).
-     *
-     * @param district The name of the district (e.g. Pune)
-     * @param year The assessment year (e.g. 2023)
-     * @return Markdown-formatted concise analysis from Groq
      */
     public String explainStress(String district, Integer year) {
-        // 1. Fetch live data context from database
-        GroundwaterDataDTO data = groundwaterDataService.getDataByDistrictAndYear(district, year);
-        if (data == null) {
-            throw new RuntimeException("No data found in database for district: " + district + " and year: " + year);
+        GroundwaterDataDTO data;
+        try {
+            data = groundwaterDataService.getDataByDistrictAndYear(district, year);
+        } catch (Exception e) {
+            log.error("Database query failed in explainStress: {}", e.getMessage());
+            return String.format("**Database Error:** Unable to retrieve data for district %s in year %d.", district, year);
         }
 
-        // 2. Build instructions for the AI
-        String systemInstruction = "You are an expert hydrogeologist and environmental analyst specialized in Indian groundwater resources. "
-                + "Provide a concise explanation (between 100 to 150 words) of the groundwater stress level based on the provided data. "
-                + "Format your answer in professional, easy-to-read markdown. Use bullet points where appropriate. "
-                + "Do not use placeholders, and do not hallucinate numbers. Use only the data context provided below.";
+        if (data == null) {
+            return String.format("**No Data:** No record found in database for district: %s, year: %d.", district, year);
+        }
 
-        String dataContext = String.format(
-                "Data Context:\n"
-                + "- District: %s\n"
-                + "- State: %s\n"
-                + "- Year: %d\n"
-                + "- Annual Recharge: %.2f Ham\n"
-                + "- Extractable Resources: %.2f Ham\n"
-                + "- Total Extraction: %.2f Ham\n"
-                + "- Stage of Development: %.2f%%\n"
-                + "- Category: %s\n"
-                + "- Remarks: %s\n",
-                data.getDistrict(),
-                data.getState(),
-                data.getYear(),
-                data.getAnnualRecharge(),
-                data.getExtractableResources(),
-                data.getTotalExtraction(),
-                data.getStageDevelopment(),
-                data.getCategory(),
-                data.getRemarks()
-        );
+        String systemInstruction = "You are an expert hydrogeologist specialized in Indian groundwater resources. "
+                + "Provide a concise explanation (between 100 to 150 words) of the groundwater stress level based on the data. "
+                + "Format in professional markdown using bullet points. Do not hallucinate numbers.";
 
         String userPrompt = String.format(
-                "%s\n\n"
-                + "Please explain the groundwater stress level for %s district in %d. "
-                + "Include: \n"
-                + "1. An assessment of its Stage of Development (%.2f%%) and current category status (%s).\n"
-                + "2. Brief geological or usage-based causes for this extraction rate.\n"
-                + "3. A concise recommendation for local water management (e.g., rainwater harvesting, crop selection shift). "
-                + "Keep the total word count strictly between 100 and 150 words.",
-                dataContext,
-                data.getDistrict(),
-                data.getYear(),
-                data.getStageDevelopment(),
-                data.getCategory()
+                "Data Context:\n"
+                + "- District: %s, State: %s, Year: %d\n"
+                + "- Recharge: %.2f Ham, Extraction: %.2f Ham\n"
+                + "- Stage of Development: %.2f%%, Category: %s, Remarks: %s\n\n"
+                + "Please explain the groundwater stress level. Assess the stage of development, category, and usage-based causes.",
+                data.getDistrict(), data.getState(), data.getYear(),
+                data.getAnnualRecharge(), data.getTotalExtraction(),
+                data.getStageDevelopment(), data.getCategory(), data.getRemarks()
         );
 
         String fullPrompt = systemInstruction + "\n\n" + userPrompt;
 
-        // 3. Call Groq via Spring AI ChatClient
-        ChatResponse response = chatClient.call(new Prompt(fullPrompt));
+        try {
+            log.info("Groq request started for explainStress - District: {}, Year: {}", district, year);
+            ChatResponse response = chatClient.call(new Prompt(fullPrompt));
+            log.info("Groq response received successfully for explainStress");
 
-        // 4. Return result text
-        if (response != null && response.getResult() != null && response.getResult().getOutput() != null) {
-            return response.getResult().getOutput().getContent();
-        } else {
-            throw new RuntimeException("Could not get a valid response from the AI model.");
+            if (response != null && response.getResult() != null && response.getResult().getOutput() != null) {
+                return response.getResult().getOutput().getContent();
+            } else {
+                throw new RuntimeException("Empty response from AI client");
+            }
+        } catch (Exception e) {
+            log.error("Groq request failed in explainStress, returning fallback: {}", e.getMessage());
+            return String.format(
+                "### Groundwater Stress Summary (Fallback)\n\n"
+                + "* **District:** %s (%s)\n"
+                + "* **Assessment Year:** %d\n"
+                + "* **Stage of Development:** %.2f%% (%s)\n"
+                + "* **Resource Metrics:** Annual recharge of %.2f Ham vs. Total annual extraction of %.2f Ham.\n"
+                + "* **Status:** Classified as **%s**. *Note: AI-generated insights are currently unavailable due to Groq service limits or configuration issues.*",
+                data.getDistrict(), data.getState(), data.getYear(),
+                data.getStageDevelopment(), data.getCategory(),
+                data.getAnnualRecharge(), data.getTotalExtraction(), data.getCategory()
+            );
         }
     }
 
     /**
      * Compares groundwater resource metrics between two districts for a specific year.
-     * Uses Retrieval-Augmented Generation (RAG).
-     *
-     * @param district1 The name of the first district
-     * @param district2 The name of the second district
-     * @param year The assessment year
-     * @return Markdown-formatted concise comparison from Groq
      */
     public String compareDistricts(String district1, String district2, Integer year) {
-        // 1. Fetch data for district 1
         GroundwaterDataDTO data1 = null;
-        try {
-            data1 = groundwaterDataService.getDataByDistrictAndYear(district1, year);
-        } catch (Exception e) {
-            // Handled or will throw below if null
-        }
-        if (data1 == null) {
-            throw new RuntimeException("No groundwater data found for " + district1 + " in " + year + ".");
-        }
-
-        // 2. Fetch data for district 2
         GroundwaterDataDTO data2 = null;
         try {
+            data1 = groundwaterDataService.getDataByDistrictAndYear(district1, year);
             data2 = groundwaterDataService.getDataByDistrictAndYear(district2, year);
         } catch (Exception e) {
-            // Handled or will throw below if null
-        }
-        if (data2 == null) {
-            throw new RuntimeException("No groundwater data found for " + district2 + " in " + year + ".");
+            log.error("Database query failed in compareDistricts: {}", e.getMessage());
         }
 
-        // 3. Build instructions & structured prompt for the AI comparison
-        String systemInstruction = "You are a groundwater resource expert. "
-                + "Compare the following two districts using only the provided groundwater data.\n\n"
-                + "Instructions:\n"
-                + "- Compare groundwater availability.\n"
-                + "- Compare extraction levels.\n"
-                + "- Compare stage development.\n"
-                + "- Identify which district faces greater groundwater stress.\n"
-                + "- Provide a concise conclusion.\n"
-                + "- Use markdown formatting.\n"
-                + "- Keep response strictly between 120 and 180 words.\n"
-                + "- Do not hallucinate.\n"
-                + "- Use only supplied data.";
+        if (data1 == null || data2 == null) {
+            return "**Comparison Error:** Unable to retrieve data for one or both districts for comparison.";
+        }
+
+        String systemInstruction = "You are a groundwater resource expert. Compare the following two districts. "
+                + "Compare availability, extraction, stage of development, and identify which district faces greater stress. "
+                + "Keep response strictly between 120 and 180 words, formatted in markdown.";
 
         String dataContext = String.format(
-                "District 1:\n"
-                + "- District: %s\n"
-                + "- State: %s\n"
-                + "- Year: %d\n"
-                + "- Annual Recharge: %.2f Ham\n"
-                + "- Extractable Resources: %.2f Ham\n"
-                + "- Total Extraction: %.2f Ham\n"
-                + "- Stage of Development: %.2f%%\n"
-                + "- Category: %s\n\n"
-                + "District 2:\n"
-                + "- District: %s\n"
-                + "- State: %s\n"
-                + "- Year: %d\n"
-                + "- Annual Recharge: %.2f Ham\n"
-                + "- Extractable Resources: %.2f Ham\n"
-                + "- Total Extraction: %.2f Ham\n"
-                + "- Stage of Development: %.2f%%\n"
-                + "- Category: %s\n",
-                data1.getDistrict(), data1.getState(), data1.getYear(),
-                data1.getAnnualRecharge(), data1.getExtractableResources(), data1.getTotalExtraction(), data1.getStageDevelopment(), data1.getCategory(),
-                data2.getDistrict(), data2.getState(), data2.getYear(),
-                data2.getAnnualRecharge(), data2.getExtractableResources(), data2.getTotalExtraction(), data2.getStageDevelopment(), data2.getCategory()
+                "District 1:\n- Name: %s, State: %s, Stage: %.2f%%, Category: %s, Extraction: %.2f Ham\n\n"
+                + "District 2:\n- Name: %s, State: %s, Stage: %.2f%%, Category: %s, Extraction: %.2f Ham\n",
+                data1.getDistrict(), data1.getState(), data1.getStageDevelopment(), data1.getCategory(), data1.getTotalExtraction(),
+                data2.getDistrict(), data2.getState(), data2.getStageDevelopment(), data2.getCategory(), data2.getTotalExtraction()
         );
 
         String fullPrompt = systemInstruction + "\n\n" + dataContext;
 
-        // 4. Call Groq via ChatClient
-        ChatResponse response = chatClient.call(new Prompt(fullPrompt));
+        try {
+            log.info("Groq request started for compareDistricts - {} vs {} ({})", district1, district2, year);
+            ChatResponse response = chatClient.call(new Prompt(fullPrompt));
+            log.info("Groq response received successfully for compareDistricts");
 
-        // 5. Return result text
-        if (response != null && response.getResult() != null && response.getResult().getOutput() != null) {
-            return response.getResult().getOutput().getContent();
-        } else {
-            throw new RuntimeException("Could not get a valid response from the AI model.");
+            if (response != null && response.getResult() != null && response.getResult().getOutput() != null) {
+                return response.getResult().getOutput().getContent();
+            } else {
+                throw new RuntimeException("Empty response from AI client");
+            }
+        } catch (Exception e) {
+            log.error("Groq request failed in compareDistricts, returning fallback: {}", e.getMessage());
+            GroundwaterDataDTO moreStressed = (data1.getStageDevelopment() > data2.getStageDevelopment()) ? data1 : data2;
+            GroundwaterDataDTO lessStressed = (moreStressed == data1) ? data2 : data1;
+            return String.format(
+                "### District Comparison Summary (Fallback)\n\n"
+                + "A comparative analysis between **%s** (%s) and **%s** (%s) in %d shows:\n\n"
+                + "* **Water Stress Index:** **%s** has a higher Stage of Development of **%.2f%%** (%s) compared to **%s** with **%.2f%%** (%s).\n"
+                + "* **Volumetric Extraction:** **%s** extracts %.2f Ham of groundwater annually, while **%s** extracts %.2f Ham.\n"
+                + "* **Stress Evaluation:** **%s** exhibits higher vulnerability and groundwater risk than **%s**.\n"
+                + "*Note: Detailed AI comparative text is unavailable due to Groq service status.*",
+                data1.getDistrict(), data1.getState(), data2.getDistrict(), data2.getState(), year,
+                moreStressed.getDistrict(), moreStressed.getStageDevelopment(), moreStressed.getCategory(),
+                lessStressed.getDistrict(), lessStressed.getStageDevelopment(), lessStressed.getCategory(),
+                data1.getDistrict(), data1.getTotalExtraction(), data2.getDistrict(), data2.getTotalExtraction(),
+                moreStressed.getDistrict(), lessStressed.getDistrict()
+            );
         }
     }
 
     /**
      * Compares groundwater resource summary metrics between two states for a specific year.
-     * Uses Retrieval-Augmented Generation (RAG).
-     *
-     * @param state1 The name of the first state
-     * @param state2 The name of the second state
-     * @param year The assessment year
-     * @return Markdown-formatted concise comparison from Groq
      */
     public String compareStates(String state1, String state2, Integer year) {
-        // 1. Fetch data for state 1
         GroundwaterSummaryDTO summary1 = null;
-        try {
-            summary1 = groundwaterDataService.getStateSummary(state1, year);
-        } catch (Exception e) {
-            // Handled or will throw below if null
-        }
-        if (summary1 == null) {
-            throw new RuntimeException("No groundwater data found for " + state1 + " in " + year + ".");
-        }
-
-        // 2. Fetch data for state 2
         GroundwaterSummaryDTO summary2 = null;
         try {
+            summary1 = groundwaterDataService.getStateSummary(state1, year);
             summary2 = groundwaterDataService.getStateSummary(state2, year);
         } catch (Exception e) {
-            // Handled or will throw below if null
-        }
-        if (summary2 == null) {
-            throw new RuntimeException("No groundwater data found for " + state2 + " in " + year + ".");
+            log.error("Database query failed in compareStates: {}", e.getMessage());
         }
 
-        // 3. Build instructions & structured prompt for the AI comparison
-        String systemInstruction = "You are a groundwater resource expert. "
-                + "Compare the following two states using only the provided state-level groundwater summaries.\n\n"
-                + "Instructions:\n"
-                + "- Compare groundwater availability (total recharge).\n"
-                + "- Compare total extraction levels.\n"
-                + "- Compare the average stage of development.\n"
-                + "- Compare critical and overexploited districts count.\n"
-                + "- Identify which state faces greater groundwater stress overall.\n"
-                + "- Provide a concise conclusion.\n"
-                + "- Use markdown formatting.\n"
-                + "- Keep response strictly between 120 and 180 words.\n"
-                + "- Do not hallucinate.\n"
-                + "- Use only supplied data.";
+        if (summary1 == null || summary2 == null) {
+            return "**Comparison Error:** Unable to retrieve state-level data summaries for comparison.";
+        }
+
+        String systemInstruction = "You are a groundwater resource expert. Compare the following two states using state summaries. "
+                + "Compare recharge, extraction, average stage development, and count of critical areas. "
+                + "Keep response strictly between 120 and 180 words, formatted in markdown.";
 
         String dataContext = String.format(
-                "State 1:\n"
-                + "- State: %s\n"
-                + "- Year: %d\n"
-                + "- Total Annual Recharge: %.2f km3\n"
-                + "- Total Annual Extraction: %.2f km3\n"
-                + "- Average Stage of Development: %.2f%%\n"
-                + "- Total Districts Assessed: %d\n"
-                + "- Critical/Overexploited Districts: %d\n\n"
-                + "State 2:\n"
-                + "- State: %s\n"
-                + "- Year: %d\n"
-                + "- Total Annual Recharge: %.2f km3\n"
-                + "- Total Annual Extraction: %.2f km3\n"
-                + "- Average Stage of Development: %.2f%%\n"
-                + "- Total Districts Assessed: %d\n"
-                + "- Critical/Overexploited Districts: %d\n",
-                summary1.getState(), summary1.getYear(),
-                summary1.getTotalRecharge(), summary1.getTotalExtraction(), summary1.getAverageStageDevelopment(),
-                summary1.getTotalDistricts(), summary1.getCriticalAndOverexploitedAreas(),
-                summary2.getState(), summary2.getYear(),
-                summary2.getTotalRecharge(), summary2.getTotalExtraction(), summary2.getAverageStageDevelopment(),
-                summary2.getTotalDistricts(), summary2.getCriticalAndOverexploitedAreas()
+                "State 1:\n- State: %s, Avg Stage: %.2f%%, Districts: %d, Critical/OE: %d, Total Extraction: %.2f km3\n\n"
+                + "State 2:\n- State: %s, Avg Stage: %.2f%%, Districts: %d, Critical/OE: %d, Total Extraction: %.2f km3\n",
+                summary1.getState(), summary1.getAverageStageDevelopment(), summary1.getTotalDistricts(), summary1.getCriticalAndOverexploitedAreas(), summary1.getTotalExtraction(),
+                summary2.getState(), summary2.getAverageStageDevelopment(), summary2.getTotalDistricts(), summary2.getCriticalAndOverexploitedAreas(), summary2.getTotalExtraction()
         );
 
         String fullPrompt = systemInstruction + "\n\n" + dataContext;
 
-        // 4. Call Groq via ChatClient
-        ChatResponse response = chatClient.call(new Prompt(fullPrompt));
+        try {
+            log.info("Groq request started for compareStates - {} vs {} ({})", state1, state2, year);
+            ChatResponse response = chatClient.call(new Prompt(fullPrompt));
+            log.info("Groq response received successfully for compareStates");
 
-        // 5. Return result text
-        if (response != null && response.getResult() != null && response.getResult().getOutput() != null) {
-            return response.getResult().getOutput().getContent();
-        } else {
-            throw new RuntimeException("Could not get a valid response from the AI model.");
+            if (response != null && response.getResult() != null && response.getResult().getOutput() != null) {
+                return response.getResult().getOutput().getContent();
+            } else {
+                throw new RuntimeException("Empty response from AI client");
+            }
+        } catch (Exception e) {
+            log.error("Groq request failed in compareStates, returning fallback: {}", e.getMessage());
+            GroundwaterSummaryDTO moreStressed = (summary1.getAverageStageDevelopment() > summary2.getAverageStageDevelopment()) ? summary1 : summary2;
+            GroundwaterSummaryDTO lessStressed = (moreStressed == summary1) ? summary2 : summary1;
+            return String.format(
+                "### State Summary Comparison (Fallback)\n\n"
+                + "Comparing state-wide metrics for **%s** and **%s** in %d:\n\n"
+                + "* **Average Water Development:** **%s** averages **%.2f%%** stage of development compared to **%s**'s average of **%.2f%%**.\n"
+                + "* **Critical Regions:** **%s** has **%d** critical/overexploited districts out of %d, while **%s** has **%d** out of %d.\n"
+                + "* **Extraction Scale:** Total annual extraction is %.2f km³ for %s and %.2f km³ for %s.\n"
+                + "*Note: Fully detailed AI analysis is offline at the moment.*",
+                summary1.getState(), summary2.getState(), year,
+                summary1.getState(), summary1.getAverageStageDevelopment(), summary2.getState(), summary2.getAverageStageDevelopment(),
+                summary1.getState(), summary1.getCriticalAndOverexploitedAreas(), summary1.getTotalDistricts(),
+                summary2.getState(), summary2.getCriticalAndOverexploitedAreas(), summary2.getTotalDistricts(),
+                summary1.getTotalExtraction(), summary1.getState(), summary2.getTotalExtraction(), summary2.getState()
+            );
         }
     }
 
     /**
-     * Generates AI-powered groundwater conservation recommendations for a given district and year.
-     * Uses Retrieval-Augmented Generation (RAG):
-     * 1. Fetches real groundwater data from MySQL via GroundwaterDataService.
-     * 2. Builds a structured prompt asking for practical conservation measures.
-     * 3. Sends the prompt to Groq via Spring AI ChatClient.
-     * 4. Returns the markdown-formatted recommendations.
-     *
-     * @param district The name of the district (e.g. Kolar)
-     * @param year The assessment year (e.g. 2023)
-     * @return Markdown-formatted conservation recommendations from Groq
+     * Generates AI-powered groundwater conservation recommendations for a district.
      */
     public String recommendConservationMeasures(String district, Integer year) {
-        // 1. Fetch live data context from database
-        GroundwaterDataDTO data = groundwaterDataService.getDataByDistrictAndYear(district, year);
-        if (data == null) {
-            throw new RuntimeException("No groundwater data found for " + district + " in " + year + ".");
+        GroundwaterDataDTO data;
+        try {
+            data = groundwaterDataService.getDataByDistrictAndYear(district, year);
+        } catch (Exception e) {
+            log.error("Database query failed in recommendConservationMeasures: {}", e.getMessage());
+            return "**Database Error:** Unable to retrieve data for recommendations.";
         }
 
-        // 2. Build the system instruction telling the AI its role and rules
-        String systemInstruction = "You are a groundwater conservation expert.\n\n"
-                + "Analyze the following groundwater data and recommend practical conservation measures.\n\n"
-                + "Instructions:\n"
-                + "1. Use only the supplied data.\n"
-                + "2. Identify the groundwater risk level.\n"
-                + "3. Explain the key concern.\n"
-                + "4. Provide 5 practical conservation measures.\n"
-                + "5. Provide short-term recommendations.\n"
-                + "6. Provide long-term recommendations.\n"
-                + "7. Keep response between 150 and 250 words.\n"
-                + "8. Format response using markdown.\n"
-                + "9. Do not hallucinate.";
+        if (data == null) {
+            return "**No Data:** Groundwater data missing for conservation planning.";
+        }
 
-        // 3. Build the data context block with all available groundwater metrics
+        String systemInstruction = "You are a groundwater conservation expert. Provide 5 practical conservation measures based on the data. "
+                + "Include short-term and long-term actions. Keep between 150 and 250 words in markdown bullet points.";
+
         String dataContext = String.format(
-                "District: %s\n"
-                + "State: %s\n"
-                + "Year: %d\n"
-                + "Annual Recharge: %.2f Ham\n"
-                + "Extractable Resources: %.2f Ham\n"
-                + "Total Extraction: %.2f Ham\n"
-                + "Stage of Development: %.2f%%\n"
-                + "Category: %s\n"
-                + "Remarks: %s\n",
-                data.getDistrict(),
-                data.getState(),
-                data.getYear(),
-                data.getAnnualRecharge(),
-                data.getExtractableResources(),
-                data.getTotalExtraction(),
-                data.getStageDevelopment(),
-                data.getCategory(),
-                data.getRemarks()
+                "District: %s, State: %s, Year: %d\n"
+                + "Stage of Development: %.2f%%, Category: %s, Remarks: %s\n",
+                data.getDistrict(), data.getState(), data.getYear(),
+                data.getStageDevelopment(), data.getCategory(), data.getRemarks()
         );
 
-        // 4. Combine system instruction + data into a single prompt
         String fullPrompt = systemInstruction + "\n\n" + dataContext;
 
-        // 5. Call Groq via Spring AI ChatClient
-        ChatResponse response = chatClient.call(new Prompt(fullPrompt));
+        try {
+            log.info("Groq request started for recommendConservationMeasures - District: {}", district);
+            ChatResponse response = chatClient.call(new Prompt(fullPrompt));
+            log.info("Groq response received successfully for recommendConservationMeasures");
 
-        // 6. Return result text
-        if (response != null && response.getResult() != null && response.getResult().getOutput() != null) {
-            return response.getResult().getOutput().getContent();
-        } else {
-            throw new RuntimeException("Could not get a valid response from the AI model.");
+            if (response != null && response.getResult() != null && response.getResult().getOutput() != null) {
+                return response.getResult().getOutput().getContent();
+            } else {
+                throw new RuntimeException("Empty response from AI client");
+            }
+        } catch (Exception e) {
+            log.error("Groq request failed in recommendConservationMeasures, returning fallback: {}", e.getMessage());
+            return String.format(
+                "### Conservation Recommendations (Fallback for %s)\n\n"
+                + "Because the stage of development is **%.2f%%** (%s), the following standard conservation protocols should be deployed:\n\n"
+                + "1. **Rainwater Harvesting:** Mandatory installation of rooftop rainwater harvesting systems in all municipal and commercial buildings.\n"
+                + "2. **Agricultural Efficiency:** Implement micro-irrigation systems (drip and sprinkler) for crops to reduce agricultural draft by up to 30%%.\n"
+                + "3. **Aquifer Recharge:** Build community check dams and recharge shafts to direct monsoon runoff back into shallow aquifers.\n"
+                + "4. **Crop Diversification:** Restrict cultivation of water-intensive crops (e.g., sugarcane, paddy) and transition to millets or oilseeds.\n"
+                + "5. **Community Audits:** Set up block-level water governance committees to monitor local water tables and extraction volumes daily.",
+                data.getDistrict(), data.getStageDevelopment(), data.getCategory()
+            );
+        }
+    }
+
+    /**
+     * Generates a comprehensive 6-section groundwater report response DTO
+     */
+    public ReportResponseDTO generateReport(ReportRequest request) {
+        StringBuilder context = new StringBuilder();
+        String title = "";
+        String reportTypeStr = request.getReportType();
+
+        if ("DISTRICT".equalsIgnoreCase(reportTypeStr)) {
+            String district = request.getDistrict();
+            Integer year = request.getYear() != null ? request.getYear() : 2023;
+            title = "Groundwater Assessment Report: " + district + " (" + year + ")";
+            try {
+                GroundwaterDataDTO data = groundwaterDataService.getDataByDistrictAndYear(district, year);
+                context.append(String.format("District: %s\nState: %s\nYear: %d\nAnnual Recharge: %.2f km3\nExtractable Resources: %.2f km3\nTotal Extraction: %.2f km3\nStage of Development: %.2f%%\nCategory: %s\nRemarks: %s\n",
+                        data.getDistrict(), data.getState(), data.getYear(), data.getAnnualRecharge(),
+                        data.getExtractableResources(), data.getTotalExtraction(), data.getStageDevelopment(),
+                        data.getCategory(), data.getRemarks()));
+            } catch (Exception e) {
+                context.append("No specific data found for district: ").append(district).append(" and year: ").append(year);
+            }
+        } else if ("STATE".equalsIgnoreCase(reportTypeStr)) {
+            String state = request.getState();
+            Integer year = request.getYear() != null ? request.getYear() : 2023;
+            title = "State Groundwater Resource Report: " + state + " (" + year + ")";
+            try {
+                GroundwaterSummaryDTO summary = groundwaterDataService.getStateSummary(state, year);
+                context.append(String.format("State: %s\nYear: %d\nTotal Districts Assessed: %d\nTotal Annual Recharge: %.2f km3\nTotal Annual Extraction: %.2f km3\nAverage Stage of Development: %.2f%%\nCritical/Overexploited Districts Count: %d\n",
+                        summary.getState(), summary.getYear(), summary.getTotalDistricts(), summary.getTotalRecharge(),
+                        summary.getTotalExtraction(), summary.getAverageStageDevelopment(), summary.getCriticalAndOverexploitedAreas()));
+                
+                List<GroundwaterDataDTO> districts = groundwaterDataService.getDataByState(state).stream()
+                        .filter(d -> d.getYear().equals(year))
+                        .collect(Collectors.toList());
+                context.append("\nDistrict Details:\n");
+                for (GroundwaterDataDTO d : districts) {
+                    context.append(String.format("- %s: Stage: %.1f%%, Category: %s\n", d.getDistrict(), d.getStageDevelopment(), d.getCategory()));
+                }
+            } catch (Exception e) {
+                context.append("No specific summary data found for state: ").append(state).append(" and year: ").append(year);
+            }
+        } else if ("COMPARATIVE".equalsIgnoreCase(reportTypeStr)) {
+            String dist1 = request.getDistrict();
+            String dist2 = request.getCompareDistrict();
+            Integer year = request.getYear() != null ? request.getYear() : 2023;
+            title = "Comparative Groundwater Assessment: " + dist1 + " vs " + dist2 + " (" + year + ")";
+            
+            try {
+                GroundwaterDataDTO d1 = groundwaterDataService.getDataByDistrictAndYear(dist1, year);
+                context.append(String.format("Entity 1: %s (%s)\nStage Development: %.2f%%\nCategory: %s\nAnnual Recharge: %.2f km3\nTotal Extraction: %.2f km3\n\n",
+                        d1.getDistrict(), d1.getState(), d1.getStageDevelopment(), d1.getCategory(), d1.getAnnualRecharge(), d1.getTotalExtraction()));
+            } catch (Exception e) {}
+            try {
+                GroundwaterDataDTO d2 = groundwaterDataService.getDataByDistrictAndYear(dist2, year);
+                context.append(String.format("Entity 2: %s (%s)\nStage Development: %.2f%%\nCategory: %s\nAnnual Recharge: %.2f km3\nTotal Extraction: %.2f km3\n",
+                        d2.getDistrict(), d2.getState(), d2.getStageDevelopment(), d2.getCategory(), d2.getAnnualRecharge(), d2.getTotalExtraction()));
+            } catch (Exception e) {}
+        } else if ("TREND".equalsIgnoreCase(reportTypeStr)) {
+            String district = request.getDistrict();
+            title = "Historical Groundwater Trend Analysis: " + district;
+            try {
+                List<GroundwaterDataDTO> trends = groundwaterDataService.getTrendAnalysis(district, 2020, 2023);
+                context.append("Historical Trend Data for ").append(district).append(":\n");
+                for (GroundwaterDataDTO d : trends) {
+                    context.append(String.format("- Year %d: Recharge: %.2f km3, Extraction: %.2f km3, Stage: %.2f%%, Category: %s\n",
+                             d.getYear(), d.getAnnualRecharge(), d.getTotalExtraction(), d.getStageDevelopment(), d.getCategory()));
+                }
+            } catch (Exception e) {
+                context.append("No historical trend data found for ").append(district);
+            }
+        }
+
+        String systemInstruction = "You are a professional environmental analyst. "
+                + "Generate a detailed groundwater assessment report based on the provided data context. "
+                + "You MUST return your response as a valid, parsable JSON object matching this schema exactly:\n"
+                + "{\n"
+                + "  \"title\": \"String - Professional title of the report\",\n"
+                + "  \"executiveSummary\": \"String - Professional executive summary containing 2-3 key bullet points or short paragraphs\",\n"
+                + "  \"statistics\": \"String - Detailed summary of region's statistics with bullet points\",\n"
+                + "  \"findings\": \"String - 3 detailed findings about the region's groundwater draft and resources\",\n"
+                + "  \"recommendations\": \"String - 4 actionable recommendations for water conservation and management\",\n"
+                + "  \"conclusion\": \"String - Closing remarks and outlook\"\n"
+                + "}\n"
+                + "Do NOT wrap the output in markdown code blocks like ```json. Return only the raw JSON string starting with { and ending with }.";
+
+        String userPrompt = "Report Title: " + title + "\n\nData Context:\n" + context.toString() + "\n\nPlease generate the structured JSON report.";
+        String fullPrompt = systemInstruction + "\n\n" + userPrompt;
+
+        try {
+            log.info("Groq request started for generateReport - Type: {}, Context Length: {}", reportTypeStr, context.length());
+            ChatResponse response = chatClient.call(new Prompt(fullPrompt));
+            log.info("Groq response received successfully for generateReport");
+
+            if (response != null && response.getResult() != null && response.getResult().getOutput() != null) {
+                String rawJson = response.getResult().getOutput().getContent().trim();
+                // Strip code fence if the LLM wrapped it anyway
+                if (rawJson.startsWith("```")) {
+                    rawJson = rawJson.replaceAll("^```json\\s*", "").replaceAll("```$", "").trim();
+                }
+                return objectMapper.readValue(rawJson, ReportResponseDTO.class);
+            } else {
+                throw new RuntimeException("Empty response from AI client");
+            }
+        } catch (Exception e) {
+            log.error("Groq request failed or JSON parsing failed in generateReport: {}, returning fallback report", e.getMessage());
+            return generateFallbackReport(request, title, context.toString());
+        }
+    }
+
+    /**
+     * Helper to generate a fallback ReportResponseDTO
+     */
+    private ReportResponseDTO generateFallbackReport(ReportRequest request, String title, String dataContext) {
+        String execSummary = String.format(
+            "This is a fallback summary prepared automatically from the groundwater database. The AI analysis engine is currently offline or unreachable. "
+            + "The assessment evaluated the regional parameters for the specified criteria (%s). Based on historical records, water extraction levels "
+            + "in highly developed zones exceed recommended thresholds, demanding immediate planning.", request.getReportType()
+        );
+
+        String stats = dataContext.isEmpty() ? "No database records were accessible for this specific configuration."
+                : dataContext.replace("\n", "\n* ");
+
+        String findings = 
+            "* Groundwater recharge levels fluctuate depending on monsoon intensity and urban development trends.\n"
+            + "* Over-reliance on tube wells for farming constitutes the primary driver of water table decline.\n"
+            + "* Aquifer replenishment rates are insufficient to offset current municipal extraction volumes.";
+
+        String recommendations = 
+            "* mandatory installation of localized artificial groundwater recharge mechanisms.\n"
+            + "* Policy support for switching from high-water crops like sugarcane to climate-resilient pulses.\n"
+            + "* Community-led micro-irrigation campaigns to achieve a 20-30% reduction in agricultural draft.\n"
+            + "* Deployment of Leaflet-based spatial trackers to monitor regional groundwater extraction tables.";
+
+        String conclusion = "In conclusion, immediate municipal and rural conservation action is recommended to stabilize water levels. AI-guided modeling should be run when Groq is available.";
+
+        return new ReportResponseDTO(title, execSummary, stats, findings, recommendations, conclusion);
+    }
+
+    /**
+     * Generates concise summary of national analytics trends
+     */
+    public String generateAnalyticsInsights(List<GroundwaterDataDTO> topRisk,
+                                            List<GroundwaterDataDTO> topSafe) {
+        StringBuilder context = new StringBuilder();
+        context.append("Top Risk Districts:\n");
+        for (int i = 0; i < Math.min(5, topRisk.size()); i++) {
+            GroundwaterDataDTO r = topRisk.get(i);
+            context.append(String.format("- %s, %s: Stage: %.1f%%, Category: %s\n",
+                    r.getDistrict(), r.getState(), r.getStageDevelopment(), r.getCategory()));
+        }
+        context.append("\nTop Safe Districts:\n");
+        for (int i = 0; i < Math.min(5, topSafe.size()); i++) {
+            GroundwaterDataDTO r = topSafe.get(i);
+            context.append(String.format("- %s, %s: Stage: %.1f%%, Category: %s\n",
+                    r.getDistrict(), r.getState(), r.getStageDevelopment(), r.getCategory()));
+        }
+
+        String systemInstruction = "You are an expert hydrogeologist. Summarize the overall groundwater stress trends in India based on the risk data. "
+                + "Provide a concise summary card (between 100 and 150 words) with key observations. Format your output in professional markdown with 2-3 key bullet points. Do not hallucinate.";
+
+        String fullPrompt = systemInstruction + "\n\nData Context:\n" + context.toString();
+        try {
+            log.info("Groq request started for generateAnalyticsInsights");
+            ChatResponse response = chatClient.call(new Prompt(fullPrompt));
+            log.info("Groq response received successfully for generateAnalyticsInsights");
+
+            if (response != null && response.getResult() != null && response.getResult().getOutput() != null) {
+                return response.getResult().getOutput().getContent();
+            } else {
+                throw new RuntimeException("Empty response from AI client");
+            }
+        } catch (Exception e) {
+            log.error("Groq request failed in generateAnalyticsInsights, returning fallback: {}", e.getMessage());
+            return "### Key Groundwater Observations (Fallback)\n\n"
+                    + "* **Critical Stress Concentrations:** High stage of development (exceeding 100%) is concentrated in specific districts, indicating that water extraction exceeds natural recharge rates.\n"
+                    + "* **Resource Imbalance:** Safe zones reside mostly in areas with high rainfall and lower population density, displaying stages of development below 30%.\n"
+                    + "* **Mitigation Need:** Systemic shifts to sustainable agriculture and mandatory rain harvesting are vital in high-risk zones.";
         }
     }
 }

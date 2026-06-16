@@ -1,9 +1,10 @@
 import React from 'react';
 import { Send } from 'lucide-react';
+import VoiceInputButton from './VoiceInputButton';
 
 /**
- * ChatInput Component (Phase 3.5)
- * Renders the text input box, Send button, and suggestion prompt pills below.
+ * ChatInput Component (Phase 6)
+ * Renders the text input box, Voice input button, Send button, and suggestion prompt pills below.
  * Maintains structural and class naming compatibility with the original styling.
  */
 export function ChatInput({
@@ -32,6 +33,10 @@ export function ChatInput({
           placeholder="Ask about groundwater (e.g. Pune in 2023, critical areas in Telangana)..."
           disabled={loading}
           autoFocus
+        />
+        <VoiceInputButton 
+          onTranscript={(text) => setInputText(prev => prev ? prev + ' ' + text : text)}
+          disabled={loading}
         />
         <button 
           type="submit" 

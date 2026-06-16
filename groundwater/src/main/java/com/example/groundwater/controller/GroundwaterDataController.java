@@ -1,7 +1,8 @@
 package com.example.groundwater.controller;
 
-import com.example.groundwater.dto.ApiResponse;
-import com.example.groundwater.dto.GroundwaterDataDTO;
+import com.example.groundwater.dto.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import com.example.groundwater.service.AiService;
 import com.example.groundwater.service.GroundwaterDataService;
 import com.example.groundwater.service.GroundwaterSummaryDTO;
@@ -25,6 +26,7 @@ import java.util.List;
 @Tag(name = "Groundwater Data API", description = "APIs for querying groundwater resource data")
 public class GroundwaterDataController {
 
+    private static final Logger log = LoggerFactory.getLogger(GroundwaterDataController.class);
     private final GroundwaterDataService groundwaterDataService;
     private final AiService aiService;
 
@@ -491,6 +493,139 @@ public class GroundwaterDataController {
             );
             return ResponseEntity.ok(response);
         } catch (Exception e) {
+            return handleException(e);
+        }
+    }
+
+    /**
+     * Endpoint: GET /api/v1/groundwater/map-data
+     * Retrieves coordinates and basic metrics for districts map
+     */
+    @GetMapping("/map-data")
+    @Operation(summary = "Get map data", description = "Retrieves coordinates and categories for Leaflet map markers")
+    public ResponseEntity<ApiResponse<List<MapDataDTO>>> getMapData() {
+        try {
+            List<MapDataDTO> data = groundwaterDataService.getMapData();
+            ApiResponse<List<MapDataDTO>> response = new ApiResponse<>(
+                    true,
+                    "Map data retrieved successfully",
+                    200,
+                    data
+            );
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+    }
+
+    /**
+     * Endpoint: GET /api/v1/groundwater/dashboard
+     * Retrieves aggregated statistics for the dashboard
+     */
+    @GetMapping("/dashboard")
+    @Operation(summary = "Get dashboard metrics", description = "Retrieves aggregated counts, top lists, and category distribution for the dashboard")
+    public ResponseEntity<ApiResponse<DashboardDTO>> getDashboardData() {
+        try {
+            DashboardDTO data = groundwaterDataService.getDashboardData();
+            ApiResponse<DashboardDTO> response = new ApiResponse<>(
+                    true,
+                    "Dashboard data retrieved successfully",
+                    200,
+                    data
+            );
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+    }
+
+    /**
+     * Endpoint: GET /api/v1/groundwater/statistics
+     * Retrieves filtered data for charts and dropdown selections
+     */
+    @GetMapping("/statistics")
+    @Operation(summary = "Get statistics", description = "Retrieves state summaries, district details, and trends with optional filters")
+    public ResponseEntity<ApiResponse<StatisticsDTO>> getStatistics(
+            @RequestParam(required = false) String state,
+            @RequestParam(required = false) String district,
+            @RequestParam(required = false) Integer year) {
+        try {
+            StatisticsDTO data = groundwaterDataService.getStatistics(state, district, year);
+            ApiResponse<StatisticsDTO> response = new ApiResponse<>(
+                    true,
+                    "Statistics retrieved successfully",
+                    200,
+                    data
+            );
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+    }
+
+    /**
+     * Endpoint: GET /api/v1/groundwater/analytics
+     * Retrieves analytical scores, rankings, and AI-generated insight statements
+     */
+    @GetMapping("/analytics")
+    @Operation(summary = "Get analytics data", description = "Retrieves risk scores, state rankings, and AI generated insights and conservation suggestions")
+    public ResponseEntity<ApiResponse<AnalyticsDTO>> getAnalyticsData() {
+        log.info("Analytics request received");
+        try {
+            AnalyticsDTO data = groundwaterDataService.getAnalyticsData();
+            
+            // Call AI service to populate AI insights
+            String insights = aiService.generateAnalyticsInsights(
+                    data.getTopRiskDistricts(),
+                    data.getTopSafeDistricts()
+            );
+            data.setAiInsights(insights);
+
+            ApiResponse<AnalyticsDTO> response = new ApiResponse<>(
+                    true,
+                    "Analytics retrieved successfully",
+                    200,
+                    data
+            );
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            log.error("Failed to generate analytics data, returning fallback: {}", e.getMessage());
+            // Fallback: return fallback data when error occurs
+            AnalyticsDTO fallbackData = new AnalyticsDTO(
+                    0, 0, 0, 0, 0,
+                    java.util.Collections.emptyList(),
+                    java.util.Collections.emptyList(),
+                    "Analytics AI is currently offline. Please check connection."
+            );
+            ApiResponse<AnalyticsDTO> response = new ApiResponse<>(
+                    true,
+                    "Analytics retrieved (Fallback Mode)",
+                    200,
+                    fallbackData
+            );
+            return ResponseEntity.ok(response);
+        }
+    }
+
+    /**
+     * Endpoint: POST /api/v1/groundwater/ai/report
+     * Generates custom comprehensive markdown reports
+     */
+    @PostMapping("/ai/report")
+    @Operation(summary = "Generate AI report", description = "Generates a structured comprehensive markdown report based on selections using Groq")
+    public ResponseEntity<ApiResponse<ReportResponseDTO>> generateReport(@RequestBody ReportRequest request) {
+        log.info("Report request received");
+        try {
+            ReportResponseDTO reportResponse = aiService.generateReport(request);
+            ApiResponse<ReportResponseDTO> response = new ApiResponse<>(
+                    true,
+                    "AI report generated successfully",
+                    200,
+                    reportResponse
+            );
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            log.error("Failed to generate report: {}", e.getMessage());
             return handleException(e);
         }
     }

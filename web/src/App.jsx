@@ -5,15 +5,62 @@ import { useChatHistory } from './hooks/useChatHistory';
 import { apiService } from './services/api';
 import { parseQuery } from './services/queryParser';
 
+// Authentication context and pages
+import { AuthProvider, useAuth } from './context/AuthContext';
+import Login from './components/Login';
+import Register from './components/Register';
+import ForgotPassword from './components/ForgotPassword';
+import ResetPassword from './components/ResetPassword';
+
+// Premium Feature Page Components
+import Dashboard from './components/Dashboard';
+import InteractiveMap from './components/InteractiveMap';
+import AnalyticsPage from './components/AnalyticsPage';
+import StatisticsPage from './components/StatisticsPage';
+import ReportGenerator from './components/ReportGenerator';
+
 /**
  * Main App Component (Phase 3.5)
- * Acts as the top-level orchestrator of the application:
- * - Integrates the useChatHistory hook to maintain multi-session conversations.
- * - Handles the toggle state of the collapsible left sidebar.
- * - Processes query submissions: calls the smart parser, triggers Axios API requests,
- *   handles HTTP response status codes/exceptions, and appends user/bot messages.
+ * Wraps the app in AuthProvider.
  */
 function App() {
+  return (
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
+  );
+}
+
+/**
+ * AppContent Component
+ * Performs the actual layout and state-based routing.
+ */
+function AppContent() {
+  const { isAuthenticated, loading: authLoading, logout, user } = useAuth();
+  
+  // Custom router state checking URL query params for reset token
+  const [currentView, setCurrentView] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('token')) {
+      return 'reset-password';
+    }
+    return 'login';
+  });
+  
+  const [resetToken, setResetToken] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('token') || '';
+  });
+
+  const activeView = isAuthenticated ? 'dashboard' : (currentView === 'dashboard' ? 'login' : currentView);
+
+  const handleViewChange = (newView) => {
+    setCurrentView(newView);
+    if (newView === 'login') {
+      setResetToken('');
+    }
+  };
+
   const {
     sessions,
     activeSessionId,
@@ -28,6 +75,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [loadingText, setLoadingText] = useState('Querying database...');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [currentPage, setCurrentPage] = useState('dashboard');
 
   /**
    * Processes the natural language query, performs the live REST call to the Spring Boot
@@ -406,6 +454,30 @@ function App() {
     submitMessage(lastUserMessage.text, true);
   };
 
+  // Auth Loading State Render
+  if (authLoading) {
+    return (
+      <div className="auth-container">
+        <div className="spinner" style={{ width: '40px', height: '40px' }} />
+      </div>
+    );
+  }
+
+  // Auth View Renders
+  if (activeView === 'login') {
+    return <Login onViewChange={handleViewChange} />;
+  }
+  if (activeView === 'register') {
+    return <Register onViewChange={handleViewChange} />;
+  }
+  if (activeView === 'forgot-password') {
+    return <ForgotPassword onViewChange={handleViewChange} />;
+  }
+  if (activeView === 'reset-password') {
+    return <ResetPassword token={resetToken} onViewChange={handleViewChange} />;
+  }
+
+  // Dashboard Render (When Authenticated)
   return (
     <div className="app-container">
       <Sidebar
@@ -416,16 +488,28 @@ function App() {
         onDeleteChat={deleteSession}
         isOpen={isSidebarOpen}
         onToggle={() => setIsSidebarOpen(!isSidebarOpen)}
+        user={user}
+        onLogout={logout}
+        currentPage={currentPage}
+        onPageChange={setCurrentPage}
       />
-      <ChatWindow
-        activeSession={activeSession}
-        loading={loading}
-        loadingText={loadingText}
-        onSendMessage={submitMessage}
-        onRegenerate={handleRegenerate}
-        isSidebarOpen={isSidebarOpen}
-        onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
-      />
+      
+      {currentPage === 'chat' && (
+        <ChatWindow
+          activeSession={activeSession}
+          loading={loading}
+          loadingText={loadingText}
+          onSendMessage={submitMessage}
+          onRegenerate={handleRegenerate}
+          isSidebarOpen={isSidebarOpen}
+          onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
+        />
+      )}
+      {currentPage === 'dashboard' && <Dashboard onPageChange={setCurrentPage} />}
+      {currentPage === 'map' && <InteractiveMap />}
+      {currentPage === 'analytics' && <AnalyticsPage />}
+      {currentPage === 'statistics' && <StatisticsPage />}
+      {currentPage === 'reports' && <ReportGenerator />}
     </div>
   );
 }

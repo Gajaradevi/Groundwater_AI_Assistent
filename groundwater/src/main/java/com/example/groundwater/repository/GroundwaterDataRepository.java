@@ -80,4 +80,32 @@ public interface GroundwaterDataRepository extends JpaRepository<GroundwaterData
            "AND (UPPER(REPLACE(gd.category, '-', '_')) = 'CRITICAL' " +
            "OR UPPER(REPLACE(gd.category, '-', '_')) = 'OVER_EXPLOITED')")
     List<GroundwaterData> findCriticalAreasInState(@Param("state") String state, @Param("year") Integer year);
+
+    /**
+     * Find latest records per district
+     */
+    @Query("SELECT gd FROM GroundwaterData gd WHERE gd.year = (SELECT MAX(gd2.year) FROM GroundwaterData gd2 WHERE gd2.district = gd.district)")
+    List<GroundwaterData> findLatestRecordPerDistrict();
+
+    /**
+     * Find top 5 stressed districts for a specific year
+     */
+    List<GroundwaterData> findTop5ByYearOrderByStageDevelopmentDesc(Integer year);
+
+    /**
+     * Find top 5 safest districts for a specific year
+     */
+    List<GroundwaterData> findTop5ByYearOrderByStageDevelopmentAsc(Integer year);
+
+    /**
+     * Find distinct states
+     */
+    @Query("SELECT DISTINCT gd.state FROM GroundwaterData gd ORDER BY gd.state")
+    List<String> findDistinctStates();
+
+    /**
+     * Find distinct years
+     */
+    @Query("SELECT DISTINCT gd.year FROM GroundwaterData gd ORDER BY gd.year DESC")
+    List<Integer> findDistinctYears();
 }
