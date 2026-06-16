@@ -4,8 +4,9 @@ import com.example.groundwater.dto.*;
 import com.example.groundwater.model.*;
 import com.example.groundwater.repository.PasswordResetTokenRepository;
 import com.example.groundwater.repository.UserRepository;
-import com.example.groundwater.repository.VerificationTokenRepository;
+import com.example.groundwater.service.EmailService;
 import lombok.RequiredArgsConstructor;
+import com.example.groundwater.service.JwtService;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,15 +20,15 @@ import java.util.UUID;
 public class AuthService {
 
     private final UserRepository userRepository;
-    private final VerificationTokenRepository verificationTokenRepository;
     private final PasswordResetTokenRepository passwordResetTokenRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
     private final EmailService emailService;
 
+
     /**
-     * Registers a new user, hashes password, saves as disabled, generates activation token, and sends email.
-     */
+     * Registers a new user, hashes password, sets enabled = true, and saves the user.
+      */
     public RegisterResponse register(RegisterRequest request) {
         if (userRepository.existsByEmail(request.getEmail())) {
             throw new IllegalArgumentException("Email is already registered");
@@ -38,18 +39,10 @@ public class AuthService {
         user.setEmail(request.getEmail());
         user.setPassword(passwordEncoder.encode(request.getPassword()));
         user.setRole(UserRole.USER);
-        user.setEnabled(false);
+        // Enable user immediately
+        user.setEnabled(true);
 
-        User savedUser = userRepository.save(user);
-
-        // Generate verification token
-        String tokenString = UUID.randomUUID().toString();
-        VerificationToken verificationToken = new VerificationToken(tokenString, savedUser);
-        verificationTokenRepository.save(verificationToken);
-
-        // Send email
-        emailService.sendVerificationEmail(savedUser.getEmail(), tokenString);
-
+        userRepository.save(user);
         return new RegisterResponse("Registration successful");
     }
 
@@ -64,10 +57,6 @@ public class AuthService {
             throw new IllegalArgumentException("Invalid password");
         }
 
-        if (!user.getEnabled()) {
-            throw new IllegalArgumentException("Account not verified");
-        }
-
         String jwtToken = jwtService.generateToken(user.getEmail());
 
         return new LoginResponse(
@@ -78,24 +67,7 @@ public class AuthService {
         );
     }
 
-    /**
-     * Verifies the email activation token and enables the user account.
-     */
-    public void verifyEmail(String tokenString) {
-        VerificationToken verificationToken = verificationTokenRepository.findByToken(tokenString)
-                .orElseThrow(() -> new IllegalArgumentException("Invalid verification token"));
-
-        if (verificationToken.getExpiryDate().isBefore(LocalDateTime.now())) {
-            verificationTokenRepository.delete(verificationToken);
-            throw new IllegalArgumentException("Verification token has expired. Please register again.");
-        }
-
-        User user = verificationToken.getUser();
-        user.setEnabled(true);
-        userRepository.save(user);
-
-        verificationTokenRepository.delete(verificationToken);
-    }
+    // Verification endpoint removed – email verification no longer required
 
     /**
      * Generates a password reset token for the user and sends a reset email.

@@ -2,6 +2,8 @@ package com.example.groundwater.controller;
 
 import com.example.groundwater.dto.*;
 import com.example.groundwater.service.AuthService;
+import com.example.groundwater.service.EmailService;
+import com.example.groundwater.service.JwtService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -21,6 +23,8 @@ import java.nio.charset.StandardCharsets;
 public class AuthController {
 
     private final AuthService authService;
+    private final JwtService jwtService;
+    private final EmailService emailService;
 
     @PostMapping("/register")
     @Operation(summary = "Register user", description = "Registers a new user and sends an activation email")
@@ -30,7 +34,7 @@ public class AuthController {
             RegisterResponse response = authService.register(request);
             ApiResponse<RegisterResponse> apiResponse = new ApiResponse<>(
                     true,
-                    "Registration successful. Please check your email to verify your account.",
+                    "Account created successfully. Please login.",
                     200,
                     response
             );
@@ -94,25 +98,7 @@ public class AuthController {
         }
     }
 
-    @GetMapping("/verify")
-    @Operation(summary = "Verify account", description = "Endpoint triggered by email verification link, redirects to login page")
-    public ResponseEntity<Void> verifyEmail(@RequestParam String token) {
-        try {
-            authService.verifyEmail(token);
-            // Redirect to frontend login page with success status
-            String redirectUrl = "http://localhost:5173/login?verified=true";
-            return ResponseEntity.status(HttpStatus.FOUND)
-                    .location(URI.create(redirectUrl))
-                    .build();
-        } catch (Exception e) {
-            // Redirect to frontend login page with error status
-            String errorMsg = URLEncoder.encode(e.getMessage(), StandardCharsets.UTF_8);
-            String redirectUrl = "http://localhost:5173/login?error=" + errorMsg;
-            return ResponseEntity.status(HttpStatus.FOUND)
-                    .location(URI.create(redirectUrl))
-                    .build();
-        }
-    }
+
 
     @PostMapping("/forgot-password")
     @Operation(summary = "Request password reset", description = "Generates a reset token and sends an email to the user")

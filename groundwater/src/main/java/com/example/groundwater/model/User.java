@@ -41,7 +41,7 @@ public class User {
     private UserRole role = UserRole.USER;
 
     @Column(nullable = false)
-    private Boolean enabled = false;
+    private Boolean enabled = true;
 
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
